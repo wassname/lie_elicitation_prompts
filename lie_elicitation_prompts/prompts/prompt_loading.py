@@ -24,7 +24,7 @@ from elk.extraction.balanced_sampler import BalancedSampler, FewShotSampler
 import pandas as pd
 from loguru import logger
 
-from adapter_overseer.helpers.ds import shuffle_dataset_by
+from lie_elicitation_prompts.helpers.ds import shuffle_dataset_by
 
 
 # Local path to the folder containing the templates
@@ -33,7 +33,7 @@ TEMPLATES_FOLDER_PATH = Path(__file__).parent / "templates"
 def load_default_sys_instructions(path='system.yaml'):
     f = TEMPLATES_FOLDER_PATH / path
     yaml_dict = yaml.load(f.open('r'), Loader=yaml.FullLoader)
-    templates = yaml_dict["templates"]["falsity"]
+    templates = yaml_dict["templates"]["instructed_to_lie"]
     return templates
 
 default_sys_instructions = load_default_sys_instructions()
@@ -84,14 +84,16 @@ def load_prompts(
     """
     ds_name, _, config_name = ds_string.partition(":")
 
-    ds_dict = assert_type(dict, load_dataset(ds_name, config_name or None))
-    split_name = select_split(ds_dict, split_type)
+    # load dataset
+    ds_dict = assert_type(dict, load_dataset(ds_name, config_name or None, trust_remote_code=True))
 
-    # TODO:, can I make sure it's the same shuffle regardless of length?
-    ds = assert_type(Dataset, ds_dict[split_name].shuffle(seed=seed))
+    # take split
+    split_name = select_split(ds_dict, split_type)
+    ds = assert_type(Dataset, ds_dict[split_name])
     if world_size > 1:
         ds = ds.shard(world_size, rank)
 
+    # load dataset templates
     if template_path is None:
         prompter = DatasetTemplates(ds_name, config_name)
     else:
@@ -99,13 +101,17 @@ def load_prompts(
 
     # If the prompt template says to binarize, we should
     binarize = binarize or prompter.binarize
-    prompter.drop_non_mc_templates()
+    if binarize:
+        n = prompter.drop_non_mc_templates()
+        if n>0:
+            logger.debug(f"dropped {n} templates from {ds_string} because they are not multiple choice")
 
     num_templates = len(prompter.templates)
     assert num_templates > 0
     if rank == 0:
         logger.info(f"Extracting {num_templates} variants of each prompt")
 
+    # load labels
     label_column = prompter.label_column or infer_label_column(ds.features)
 
     label_feature = ds.features[label_column]
@@ -120,12 +126,11 @@ def load_prompts(
         if rank == 0:
             logger.info(f"Using the following pseudo-labels: {label_choices}")
 
+    # if we providing examples, we need to sample them randomly
     rng = Random(seed)
     if num_shots > 0:
         train_name = select_split(ds_dict, "train")
         
-        # TODO don't we need to binarize this?
-        # FIXME: this doesn't binarize
         fewshot = FewShotSampler(
             ds_dict[train_name].shuffle(seed=seed),  # TODO: not iterator
             num_shots=num_shots,
@@ -136,6 +141,7 @@ def load_prompts(
     else:
         fewshot_iter = None
 
+    # here we sample in a balanced way in our main dataset
     if label_column in ds.features:
         ds = BalancedSampler(
             ds.to_iterable_dataset(),
@@ -151,6 +157,7 @@ def load_prompts(
     for i, example in enumerate(ds):
         if j>N:
             break
+
         prompts = _convert_to_prompts(
             example,
             binarize=binarize,
@@ -170,14 +177,13 @@ def load_prompts(
             answer_choices = prompt['answer_choices']
             a = answer_choices[0][:3]
             b = answer_choices[1][:3]
-            keep = (a != b) and ' ' not in a
+            keep = (a != b) and (' ' not in a) and (' ' not in b)
             if not keep:
-                logger.debug(f"removing prompt because it's answers are not unique: {prompt['ds_string']} {prompt['template_name']} {prompt['answer_choices']}")
+                logger.debug(f"removing prompt because it's answers are not unique in first 3 chats or contain space: {prompt['ds_string']} {prompt['template_name']} {prompt['answer_choices']}")
             return keep
 
         prompts = list(filter(prompt_ok, prompts))
         prompts = prompt_sampler(prompts, seed=42+j)
-        # TODO: make sure they are single token answers (or at least the first token is unique)
         for p in prompts:
             j += 1
             yield p
@@ -219,12 +225,17 @@ def _convert_to_prompts(
         ]
         rng.shuffle(label_choices)
 
+    ds_name = prompter.dataset_name + ':' + prompter.subset_name
+
     for template in templates:
         answer_choices=template.get_fixed_answer_choices_list()
+        if answer_choices is None:
+            logger.info(f"skipping ds_name={ds_name} template={template.name} because it has no fixed answer choices")
+            continue
         
         # skip prompts where the responses are similar in the first token
         if answer_choices[0][:3]==answer_choices[1][:3]:
-            logger.trace(f"skipping prompt because it's answers are not unique (for the first token): {template.name} {answer_choices}")
+            logger.info(f"skipping prompt because it's answers are not unique (for the first token): {template.name} {answer_choices}")
             continue
         answer_choices = [[c] for c in answer_choices]
         for instructed_to_lie in [False, True]:
@@ -268,11 +279,12 @@ def _convert_to_prompts(
                     messages=messages,
                     
                     answer_choices=answer_choices,
-                    template_name=template.name,
+                    template_name=template.name,   
                     label_true=example['label'],
                     label_instructed=instructed_example['label'],
                     instructed_to_lie=instructed_to_lie,
                     sys_instr_name=sys_instr_name,
+                    # example_idx=example['idx'],
                 ))
 
     # Sanity check: variants should be unique
@@ -295,7 +307,7 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
             num_shots=num_shots,
         ).with_format("torch")
         datasets2.append(ds_tokens1)
-    ds_tokens = datasets.interleave_datasets(datasets2, seed=seed)
+    ds_tokens = datasets.concatenate_datasets(datasets2, seed=seed)
 
     return ds_tokens
 
