@@ -26,7 +26,7 @@ class ExtractConfig(Serializable):
     max_tokens: int | None = 776
     """Maximum length of the input sequence passed to the tokenize encoder function"""
 
-    max_examples: tuple[int, int] = 4000
+    max_examples: tuple[int, int] = 20000
     """Maximum number of examples before truncation and filtering"""
 
     seed: int = 42
