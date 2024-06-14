@@ -185,7 +185,7 @@ def load_prompts(
             return keep
 
         prompts1 = list(filter(prompt_ok, prompts))
-        prompts2 = prompt_sampler(prompts1, seed=42+j, num_truth=M, num_truth=M)
+        prompts2 = prompt_sampler(prompts1, seed=42+j, num_truth=M, num_lie=M)
         for p in prompts2:
             j += 1
             yield p
@@ -307,7 +307,7 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
             N=n,
             seed=seed,
             num_shots=num_shots,
-            M=<n
+            M=M,
         ).with_format("torch")
         datasets2.append(ds_tokens1)
     ds_tokens = datasets.concatenate_datasets(datasets2)
