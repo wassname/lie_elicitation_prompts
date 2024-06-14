@@ -39,7 +39,7 @@ def load_default_sys_instructions(path='system.yaml'):
 default_sys_instructions = load_default_sys_instructions()
 
 
-def sample_n_true_y_false_prompts(prompts, num_truth=1, num_lie=1, seed=42):
+def sample_n_true_y_false_prompts(prompts, num_truth=3, num_lie=3, seed=42):
     """sample some truth and some false"""
     df = pd.DataFrame(prompts)
     
@@ -64,6 +64,7 @@ def load_prompts(
     world_size: int = 1,
     prompt_sampler = sample_n_true_y_false_prompts,
     N=np.inf,
+    M=3.
 ) -> Iterator[dict]:
     """Load a dataset full of prompts generated from the specified dataset.
 
@@ -78,6 +79,7 @@ def load_prompts(
         rank: The rank of the current process. Defaults to 0.
         world_size: The number of processes. Defaults to 1.
         prompt_sampler: when given an unbalanced set of true and false prompts this might take one of each randomly
+        M: how many true and false forms of each example to keep
 
     Returns:
         An iterable of prompt dictionaries.
@@ -179,12 +181,12 @@ def load_prompts(
             b = answer_choices[1][:3]
             keep = (a != b) and (' ' not in a) and (' ' not in b)
             if not keep:
-                logger.debug(f"removing prompt because it's answers are not unique in first 3 chats or contain space: {prompt['ds_string']} {prompt['template_name']} {prompt['answer_choices']}")
+                logger.warning(f"removing prompt because it's answers are not unique in first 3 chars or contain space: {prompt['ds_string']} {prompt['template_name']} {prompt['answer_choices']}")
             return keep
 
-        prompts = list(filter(prompt_ok, prompts))
-        prompts = prompt_sampler(prompts, seed=42+j)
-        for p in prompts:
+        prompts1 = list(filter(prompt_ok, prompts))
+        prompts2 = prompt_sampler(prompts1, seed=42+j, num_truth=M, num_truth=M)
+        for p in prompts2:
             j += 1
             yield p
 
@@ -296,7 +298,7 @@ def _convert_to_prompts(
 
 
 
-def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train", seed=42, num_shots=1):
+def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train", seed=42, num_shots=1, M=3):
     datasets2 = []
     n = N//len(dataset_names)+1
     for ds_name in dataset_names:
@@ -305,14 +307,15 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
             N=n,
             seed=seed,
             num_shots=num_shots,
+            M=<n
         ).with_format("torch")
         datasets2.append(ds_tokens1)
-    ds_tokens = datasets.concatenate_datasets(datasets2, seed=seed)
+    ds_tokens = datasets.concatenate_datasets(datasets2)
 
     return ds_tokens
 
 
-def load_preproc_dataset(ds_name: str, N:int, split_type:str="train", seed=42, num_shots=1, sys_instructions=default_sys_instructions) -> Dataset:
+def load_preproc_dataset(ds_name: str, N:int, split_type:str="train", seed=42, num_shots=1, sys_instructions=default_sys_instructions, M=3) -> Dataset:
     ds_prompts = Dataset.from_generator(
         load_prompts,
         gen_kwargs=dict(
@@ -322,6 +325,7 @@ def load_preproc_dataset(ds_name: str, N:int, split_type:str="train", seed=42, n
             sys_instructions=sys_instructions,
             seed=seed,
             N=N,
+            M=M,
         ),
         keep_in_memory=False,
     )

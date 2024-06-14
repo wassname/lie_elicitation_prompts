@@ -33,3 +33,6 @@ class ExtractConfig(Serializable):
 
     seed: int = 42
     """Random seed."""
+
+    repeats: int = 3
+    """each example if repeated `repeats` times in it's lie and true form"""
