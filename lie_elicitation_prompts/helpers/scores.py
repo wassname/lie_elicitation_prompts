@@ -88,4 +88,10 @@ def select_choice_from_logits(logits, choiceids: List[List[int]]):
 def sum_select_choices_from_logits(logits_last: Float[Tensor, 'b h'], choice_ids: Int[Tensor, 'b c n']) -> Float[Tensor, 'b c']:
     """sum the logits for each set of choices"""
     bs = logits_last.shape[0]
-    return torch.stack([select_choice_from_logits(logits_last[bi], choice_ids[bi]) for bi in range(bs)])
+
+    device = logits_last.device
+    inds = torch.arange(bs).to(device).unsqueeze(1)
+    probs = logits_last.softmax(1)
+    choice_probs = probs[inds, choice_ids.view(bs, -1)].reshape(choice_ids.shape).sum(2)
+    return choice_probs
+    # return torch.stack([select_choice_from_logits(logits_last[bi], choice_ids[bi]) for bi in range(bs)])
