@@ -281,7 +281,7 @@ def _convert_to_prompts(
                         # some of the answers have extra trailing text, that's OK. But extra preceeding text is not, let's check for that
                         aa = a.strip()
                         assert any([any([aa.startswith(a) for a in ac]) for ac in answer_choices]), f"fewshot response `{aa}` has extra preceeding text compared to allowed choices: {answer_choices}. template is: {template.name}"
-                    messages = [dict(role='system', content=sys_instr)] + fewshot_texts + messages
+                    messages = fewshot_texts + messages
                 messages = [dict(role='system', content=sys_instr)] + messages
 
                 prompts.append(dict(
