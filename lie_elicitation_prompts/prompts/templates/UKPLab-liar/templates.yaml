@@ -1,0 +1,40 @@
+dataset: UKPLab/liar
+label_column: labels
+templates:
+  d153b4d3-d0a2-4768-854a-582440943c11: !Template
+    answer_choices: true ||| false
+    id: d153b4d3-d0a2-4768-854a-582440943c64
+    jinja: 'Here''s a statement:
+
+      in {{context}} {{text}}
+
+      In which of the following categories {{answer_choices | join(", ")}} would you
+      label it based on its truthfulness? |||
+
+      {{answer_choices[labels]}}'
+    metadata: !TemplateMetadata
+      choices_in_prompt: true
+      languages:
+      - en
+      metrics:
+      - Accuracy
+      original_task: true
+    name: Given statement guess category true or false
+    reference: ''
+  d153b4d3-d0a2-4768-854a-582440943c23: !Template
+    answer_choices: fact ||| lie
+    id: d153b4d3-d0a2-4768-854a-582440943c64\
+    jinja: 'Would you say the following statement is {{answer_choices | join(", or ")}} based on its factuality? 
+
+      Statement: {{text}} |||
+
+      {{answer_choices[labels]}}'
+    metadata: !TemplateMetadata
+      choices_in_prompt: true
+      languages:
+      - en
+      metrics:
+      - Accuracy
+      original_task: true
+    name: Given statement guess category fact or lie
+    reference: ''

@@ -13,6 +13,7 @@ import yaml
 import numpy as np
 # from elk.promptsource.templates import env
 from elk.promptsource import DatasetTemplates
+from lie_elicitation_prompts.prompts.templates import LocalDatasetTemplates
 from elk.utils import (
     assert_type,
     infer_label_column,
@@ -47,8 +48,8 @@ def sample_n_true_y_false_prompts(prompts, num_truth=3, num_lie=3, seed=42):
     # m = df.answer_choices.map(answer_len)<=2
     # df = df[m]
     df = pd.concat([
-        df.query("instructed_to_lie==True").sample(num_truth, random_state=seed),
-        df.query("instructed_to_lie==False").sample(num_lie, random_state=seed)])
+        df.query("instructed_to_lie==True").sample(int(num_truth), random_state=seed),
+        df.query("instructed_to_lie==False").sample(int(num_lie), random_state=seed)])
     return df.to_dict(orient="records")
 
 def load_prompts(
@@ -64,7 +65,7 @@ def load_prompts(
     world_size: int = 1,
     prompt_sampler = sample_n_true_y_false_prompts,
     N=np.inf,
-    M=3.
+    M:int=3
 ) -> Iterator[dict]:
     """Load a dataset full of prompts generated from the specified dataset.
 
@@ -84,6 +85,9 @@ def load_prompts(
     Returns:
         An iterable of prompt dictionaries.
     """
+    if Path(ds_string).exists():
+        template_path = ds_string
+        ds_string = Path(template_path).stem.replace('-', '/')
     ds_name, _, config_name = ds_string.partition(":")
 
     # load dataset
@@ -99,7 +103,7 @@ def load_prompts(
     if template_path is None:
         prompter = DatasetTemplates(ds_name, config_name)
     else:
-        prompter = DatasetTemplates(template_path)
+        prompter = LocalDatasetTemplates(template_path)
 
     # If the prompt template says to binarize, we should
     binarize = binarize or prompter.binarize
@@ -191,10 +195,10 @@ def load_prompts(
             yield p
 
 
-def cast_example(e):
-    assert e['label']>=0
-    assert e['label']<=1
-    e['label']=bool(e['label'])
+def cast_example(e, label_column='label'):
+    assert e[label_column]>=0
+    assert e[label_column]<=1
+    e[label_column]=bool(e[label_column])
     return e
 
 
@@ -209,7 +213,7 @@ def _convert_to_prompts(
     fewshot_iter: Iterator[list[dict]] | None = None,
 ) -> list:
     """Prompt-generating function to pass to `IterableDataset.map`."""
-    example = cast_example(example)
+    example = cast_example(example, label_column)
     prompts = []
     templates = list(prompter.templates.values())
 
@@ -225,9 +229,11 @@ def _convert_to_prompts(
             rng.choice([c for c in label_choices if c != label]),
             label,
         ]
-        rng.shuffle(label_choices)
+    rng.shuffle(label_choices)
 
-    ds_name = prompter.dataset_name + ':' + prompter.subset_name
+    ds_name = prompter.dataset_name 
+    if prompter.subset_name is not None:
+        ds_name += ':' + prompter.subset_name
 
     for template in templates:
         answer_choices=template.get_fixed_answer_choices_list()
@@ -243,7 +249,10 @@ def _convert_to_prompts(
         for instructed_to_lie in [False, True]:
             for sys_instr_name, sys_instr in sys_instructions[instructed_to_lie].items():
                 instructed_example = example.copy()
-                if instructed_to_lie: instructed_example['label'] = not bool(instructed_example['label'])
+                # FIXME don't all string turn into True?
+                # print(f"FIXME instructed_to_lie={instructed_to_lie}", instructed_example[label_column], bool(instructed_example[label_column]), not bool(instructed_example[label_column]))
+                if instructed_to_lie: 
+                    instructed_example[label_column] = not bool(instructed_example[label_column])
 
                 q, a = template.apply(instructed_example)
                 messages = [
@@ -258,12 +267,12 @@ def _convert_to_prompts(
                     fewshot_examples = [cast_example(e).copy() for e in fewshot_examples]
                     
                     if instructed_to_lie: 
-                        fewshot_examples = [{**e, 'label': not bool(e['label'])} for e in fewshot_examples]
+                        fewshot_examples = [{**e, label_column: not bool(e[label_column])} for e in fewshot_examples]
                         for e in fewshot_examples:
                             # arg, check negation worked
-                            assert e['label']>=0
-                            assert e['label']<2
-                            assert isinstance(e['label'], bool), 'labels should be bool'
+                            assert e[label_column]>=0
+                            assert e[label_column]<2
+                            assert isinstance(e[label_column], bool), 'labels should be bool'
                         
                     fewshot_texts = []
                     for q, a in map(template.apply, fewshot_examples):
@@ -273,6 +282,7 @@ def _convert_to_prompts(
                         aa = a.strip()
                         assert any([any([aa.startswith(a) for a in ac]) for ac in answer_choices]), f"fewshot response `{aa}` has extra preceeding text compared to allowed choices: {answer_choices}. template is: {template.name}"
                     messages = [dict(role='system', content=sys_instr)] + fewshot_texts + messages
+                messages = [dict(role='system', content=sys_instr)] + messages
 
                 prompts.append(dict(
                     # Strip whitespace from the answer to make it easier to
@@ -282,8 +292,7 @@ def _convert_to_prompts(
                     
                     answer_choices=answer_choices,
                     template_name=template.name,   
-                    label_true=example['label'],
-                    label_instructed=instructed_example['label'],
+                    label_true=example[label_column],
                     instructed_to_lie=instructed_to_lie,
                     sys_instr_name=sys_instr_name,
                     # example_idx=example['idx'],
@@ -302,6 +311,7 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
     datasets2 = []
     n = N//len(dataset_names)+1
     for ds_name in dataset_names:
+        # if it is a path
         ds_tokens1 = load_preproc_dataset(
             ds_name,
             N=n,
@@ -315,7 +325,7 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
     return ds_tokens
 
 
-def load_preproc_dataset(ds_name: str, N:int, split_type:str="train", seed=42, num_shots=1, sys_instructions=default_sys_instructions, M=3) -> Dataset:
+def load_preproc_dataset(ds_name: str, N:int, split_type:str="train", seed=42, num_shots=1, sys_instructions=default_sys_instructions, M=3,) -> Dataset:
     ds_prompts = Dataset.from_generator(
         load_prompts,
         gen_kwargs=dict(

@@ -12,23 +12,7 @@ from torch import Tensor
 from einops import rearrange
 import torch
 
-from lie_elicitation_prompts.helpers.select import select, select2
-
-# default_class2choices = [['No', 'Negative', 'negative', 'no', 'false', 'wrong', 'False', '0'], ['Yes', 'Positive', 'positive', 'yes', 'true', 'correct', 'right', 'True', '1']]
-
-
-# def select_choices(end_logits: Float[Tensor, "batch tokens"], choices: Int[Tensor, "batch choices alternates"],) -> Float[Tensor, "batch choices * alternates"]:
-#     # batch_size = end_logits.shape[0]
-#     choices_flat = rearrange(choices, 'b c n -> b (c n)')
-
-#     # TODO unit test and split out next two lines
-#     # batch_range = torch.arange(batch_size).unsqueeze(0).to(choices_flat.device)
-#     # selected_logits = end_logits[batch_range, choices_flat]
-
-#     selected_logits = select2(end_logits, choices_flat)
-
-#     selected_logits = rearrange(selected_logits, 'b (c n) -> b c n', c=choices.shape[1])
-#     return selected_logits
+from lie_elicitation_prompts.helpers.select import select_multi_from_tensor
 
 
 @functools.lru_cache()
@@ -88,10 +72,15 @@ def select_choice_from_logits(logits, choiceids: List[List[int]]):
 def sum_select_choices_from_logits(logits_last: Float[Tensor, 'b h'], choice_ids: Int[Tensor, 'b c n']) -> Float[Tensor, 'b c']:
     """sum the logits for each set of choices"""
     bs = logits_last.shape[0]
-
     device = logits_last.device
-    inds = torch.arange(bs).to(device).unsqueeze(1)
     probs = logits_last.softmax(1)
-    choice_probs = probs[inds, choice_ids.view(bs, -1)].reshape(choice_ids.shape).sum(2)
+
+    # flatten
+    flat_choice_ids = rearrange(choice_ids, 'b c n -> b (c n)').to(device)
+
+    # select
+    flat_choice_probs = select_multi_from_tensor(probs, flat_choice_ids)
+
+    # unflatten
+    choice_probs = rearrange(flat_choice_probs, 'b (c n) -> b c n', c=choice_ids.shape[1]).sum(2)
     return choice_probs
-    # return torch.stack([select_choice_from_logits(logits_last[bi], choice_ids[bi]) for bi in range(bs)])
