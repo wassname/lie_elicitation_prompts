@@ -264,7 +264,7 @@ def _convert_to_prompts(
                 if fewshot_iter is not None:
                     # Infinite iterator so we don't need to worry about StopIteration
                     fewshot_examples = next(fewshot_iter)
-                    fewshot_examples = [cast_example(e).copy() for e in fewshot_examples]
+                    fewshot_examples = [cast_example(e, label_column).copy() for e in fewshot_examples]
                     
                     if instructed_to_lie: 
                         fewshot_examples = [{**e, label_column: not bool(e[label_column])} for e in fewshot_examples]
