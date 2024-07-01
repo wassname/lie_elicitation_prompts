@@ -3,6 +3,7 @@ Modified from https://github.com/EleutherAI/elk/blob/3bbe26c3858aac1b03e6f80628a
 
 Changed to record choices
 """
+import multiprocessing
 from collections import Counter
 from random import Random
 from typing import Any, Iterator, Literal, List, Dict
@@ -137,7 +138,7 @@ def load_prompts(
     split_type: Literal["train", "val"] = "train",
     template_path: str | None = None,
     rank: int = 0,
-    world_size: int = 8,
+    world_size: int = 1,
     prompt_sampler = sample_n_true_y_false_prompts,
     N=np.inf,
     M:int=3
@@ -173,6 +174,7 @@ def load_prompts(
     ds = assert_type(Dataset, ds_dict[split_name])
     if world_size > 1:
         ds = ds.shard(world_size, rank)
+    N = min(N, len(ds))
 
     # load dataset templates
     if template_path is None:
@@ -220,7 +222,7 @@ def load_prompts(
         # )
         # fewshot_iter = iter(fewshot)
         fewshot_ds = FewShotDataset2(
-            ds_dict[train_name].shuffle(seed=seed),  # TODO: not iterator
+            ds_dict[train_name].shuffle(seed=seed).select(range(1000)),  # TODO: not iterator
             num_shots=num_shots,
             rng=rng,
             label_col=label_column,
@@ -238,16 +240,15 @@ def load_prompts(
     # else:
     #     if rank == 0:
     #         logger.info("No label column found, not balancing")
-    N = min(N, len(ds))
+    
     # ds1 = ds.select(range(N)).to_iterable_dataset()
 
 
-    def foo(example, i):
+    def foo(example, i, binarize, label_column, prompter, rng, sys_instructions, fewshot_ds,):
         prompts = _convert_to_prompts(
             example,
             binarize=binarize,
             label_column=label_column,
-            # label_choices=label_choices,  # type: ignore[arg-type]
             prompter=prompter,
             rng=rng,
             sys_instructions=sys_instructions,
@@ -261,11 +262,20 @@ def load_prompts(
         prompts2 = prompt_sampler(prompts1, seed=42+i, num_truth=M, num_lie=M)
         return {'prompts': prompts2}
     
-    ds1 = ds.select(range(N)).map(foo, with_indices=True, desc='convert_to_prompts',
-                                  num_proc=8,
+    ds1 = ds.select(range(N)).map(foo, with_indices=True, 
+                                  
+                                  desc='convert_to_prompts',
+                                  fn_kwargs=dict(            binarize=binarize,
+            label_column=label_column,
+            prompter=prompter,
+            rng=rng,
+            sys_instructions=sys_instructions,
+            fewshot_ds=fewshot_ds,),
+                                #   num_proc=1,#
+                                  num_proc=multiprocessing.cpu_count()//2,
 
                                   )
-    return list(itertools.chain(*ds1['prompts'].tolist()))
+    return list(itertools.chain(*ds1['prompts']))
     
 
     # j = 0
@@ -416,7 +426,7 @@ def _convert_to_prompts(
 
 
 
-def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train", seed=42, num_shots=1, M=3):
+def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train", seed=42, num_shots=1, M=3, num_proc=1,):
     datasets2 = []
     n = N//len(dataset_names)+1
     for ds_name in tqdm(dataset_names):
@@ -427,6 +437,7 @@ def load_preproc_datasets(dataset_names: List[str], N:int, split_type:str="train
             seed=seed,
             num_shots=num_shots,
             M=M,
+            num_proc=num_proc,
         ).with_format("torch")
         datasets2.append(ds_tokens1)
     ds_tokens = datasets.concatenate_datasets(datasets2)
